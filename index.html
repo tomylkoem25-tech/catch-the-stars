@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Catch the Stars — Легка гра</title>
+  <style>
+    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;}
+    #game{display:flex;flex-direction:column;height:100vh;background:linear-gradient(#001428,#003a6b);color:#fff;align-items:center;justify-content:center}
+    canvas{background:rgba(255,255,255,0.02);border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,0.5)}
+    .controls{margin-top:12px;display:flex;gap:10px;align-items:center}
+    button{padding:8px 12px;border-radius:8px;border:0;background:#ffcf33;color:#000;font-weight:700;cursor:pointer}
+    .info{position:fixed;left:12px;top:12px;background:rgba(0,0,0,0.35);padding:8px 10px;border-radius:8px}
+    .center-text{color:rgba(255,255,255,0.9);text-align:center;margin-top:12px}
+    @media (max-width:600px){canvas{width:92vw;height:56vw}}
+  </style>
+</head>
+<body>
+  <div id="game">
+    <h1>Catch the Stars ⭐</h1>
+    <canvas id="c" width="640" height="360"></canvas>
+    <div class="controls">
+      <button id="start">Почати</button>
+      <button id="pause">Пауза</button>
+      <button id="restart">Перезапустити</button>
+      <div style="color:#fff;margin-left:8px">Рахунок: <span id="score">0</span></div>
+    </div>
+    <div class="center-text">Керування: ← → або тапніть зліва/справа на екрані. Ловіть зірки, уникайте метеоритів.</div>
+  </div>
+  <div class="info">Catch the Stars — проста гра</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  let W = canvas.width, H = canvas.height;
+  const scoreEl = document.getElementById('score');
+  const startBtn = document.getElementById('start');
+  const pauseBtn = document.getElementById('pause');
+  const restartBtn = document.getElementById('restart');
+
+  // Game state
+  let running = false, paused = false;
+  let score = 0;
+  let lastSpawn = 0;
+  let spawnInterval = 900; // ms
+  let objects = []; // falling objects
+  let lastTime = performance.now();
+  let basket = { x: W/2-40, y: H-30, w: 80, h: 18, speed: 400 };
+
+  // Resize canvas for crispness
+  function resize() {
+    const ratio = window.devicePixelRatio || 1;
+    const styleW = canvas.clientWidth || 640;
+    const styleH = canvas.clientHeight || 360;
+    canvas.width = Math.max(320, styleW) * ratio;
+    canvas.height = Math.max(200, styleH) * ratio;
+    canvas.style.width = styleW + 'px';
+    canvas.style.height = styleH + 'px';
+    ctx.setTransform(ratio,0,0,ratio,0,0);
+    W = canvas.width/ratio; H = canvas.height/ratio;
+    basket.y = H - 30;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Input
+  let keys = {};
+  window.addEventListener('keydown', e => { keys[e.key] = true; if(e.key===' '){ e.preventDefault(); togglePause(); }});
+  window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+  // Touch controls: tap left/right
+  canvas.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    const rect = canvas.getBoundingClientRect();
+    const x = t.clientX - rect.left;
+    if(x < rect.width/2) simulateMove(-1); else simulateMove(1);
+  });
+
+  function simulateMove(dir) {
+    // brief nudge
+    basket.x += dir * 40;
+    constrainBasket();
+  }
+
+  function constrainBasket() {
+    if(basket.x < 0) basket.x = 0;
+    if(basket.x + basket.w > W) basket.x = W - basket.w;
+  }
+
+  // Objects: {x,y,r,vy,type} type: 'star' or 'rock'
+  function spawn(now) {
+    if(now - lastSpawn < spawnInterval) return;
+    lastSpawn = now;
+    // randomize: mostly stars, some rocks
+    const t = Math.random() < 0.78 ? 'star' : 'rock';
+    const x = Math.random() * (W - 20) + 10;
+    const r = t === 'star' ? 14 : 10;
+    const vy = 80 + Math.random()*220;
+    objects.push({x, y: -10, r, vy, type: t, rot: Math.random()*Math.PI*2, rotSpeed: (Math.random()-0.5)*2});
+    // gradually increase difficulty
+    if(score > 10) spawnInterval = 850;
+    if(score > 30) spawnInterval = 700;
+    if(score > 60) spawnInterval = 600;
+  }
+
+  function update(dt, now) {
+    if(!running || paused) return;
+    // input movement
+    const left = keys['ArrowLeft'] || keys['a'] || keys['A'];
+    const right = keys['ArrowRight'] || keys['d'] || keys['D'];
+    if(left) basket.x -= basket.speed * dt;
+    if(right) basket.x += basket.speed * dt;
+    constrainBasket();
+
+    // spawn
+    spawn(now);
+
+    // update objects
+    for(let i = objects.length-1; i >= 0; i--) {
+      const o = objects[i];
+      o.y += o.vy * dt;
+      o.rot += o.rotSpeed * dt;
+      // collision with basket?
+      if(o.y + o.r >= basket.y && o.y - o.r <= basket.y + basket.h) {
+        if(o.x > basket.x - 6 && o.x < basket.x + basket.w + 6) {
+          // caught
+          if(o.type === 'star') { score += 1; } else { score = Math.max(0, score - 5); }
+          objects.splice(i,1);
+          updateScore();
+          continue;
+        }
+      }
+      // off screen
+      if(o.y - o.r > H + 20) {
+        // penalty if star missed
+        if(o.type === 'star') score = Math.max(0, score - 1);
+        objects.splice(i,1);
+        updateScore();
+      }
+    }
+  }
+
+  function updateScore(){ scoreEl.textContent = score; }
+
+  function drawBasket() {
+    // simple basket
+    ctx.save();
+    ctx.fillStyle = '#ffcf33';
+    ctx.fillRect(basket.x, basket.y, basket.w, basket.h);
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.fillRect(basket.x, basket.y - 6, basket.w, 6);
+    ctx.restore();
+  }
+
+  function drawObject(o) {
+    ctx.save();
+    ctx.translate(o.x, o.y);
+    ctx.rotate(o.rot);
+    if(o.type === 'star') {
+      // draw a star
+      const R = o.r;
+      ctx.beginPath();
+      for(let i=0;i<5;i++){
+        ctx.lineTo(Math.cos((18+72*i)/180*Math.PI)*R, -Math.sin((18+72*i)/180*Math.PI)*R);
+        ctx.lineTo(Math.cos((54+72*i)/180*Math.PI)*(R*0.5), -Math.sin((54+72*i)/180*Math.PI)*(R*0.5));
+      }
+      ctx.closePath();
+      ctx.fillStyle = '#fff9b6';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+      ctx.stroke();
+    } else {
+      // rock
+      ctx.beginPath();
+      ctx.arc(0,0,o.r,0,Math.PI*2);
+      ctx.fillStyle = '#b8c0c8';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function render(now) {
+    const dt = Math.min(0.05, (now - lastTime) / 1000);
+    lastTime = now;
+    update(dt, now);
+    // clear
+    ctx.clearRect(0,0,W,H);
+    // background subtle gradient
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#04243a');
+    g.addColorStop(1,'#032b4b');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+
+    // draw objects
+    for(const o of objects) drawObject(o);
+
+    // draw basket
+    drawBasket();
+
+    // HUD
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.font = '14px system-ui, Arial';
+    ctx.fillText('Score: ' + score, 12, 22);
+
+    if(running && !paused) requestAnimationFrame(render);
+    else if(!running) {
+      // show overlay
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = '#fff';
+      ctx.font = '22px system-ui, Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('Натисни "Почати", щоб зіграти', W/2, H/2 - 10);
+      ctx.textAlign = 'start';
+    } else if(paused) {
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = '#fff';
+      ctx.font = '26px system-ui, Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('Пауза', W/2, H/2);
+      ctx.textAlign = 'start';
+    }
+  }
+
+  function startGame() {
+    if(running) return;
+    running = true;
+    paused = false;
+    score = 0;
+    objects = [];
+    lastSpawn = 0;
+    lastTime = performance.now();
+    spawnInterval = 900;
+    updateScore();
+    requestAnimationFrame(render);
+  }
+
+  function togglePause() {
+    if(!running) return;
+    paused = !paused;
+    if(!paused) {
+      lastTime = performance.now();
+      requestAnimationFrame(render);
+    } else {
+      // redraw to show pause
+      lastTime = performance.now();
+      requestAnimationFrame(render);
+    }
+  }
+
+  function restartGame() {
+    running = false;
+    paused = false;
+    startGame();
+  }
+
+  // Buttons
+  startBtn.addEventListener('click', startGame);
+  pauseBtn.addEventListener('click', togglePause);
+  restartBtn.addEventListener('click', restartGame);
+
+  // simple game loop to keep animationFrame alive
+  requestAnimationFrame(render);
+
+  // allow mouse movement to move basket
+  canvas.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left);
+    if(e.buttons === 1) {
+      basket.x = x - basket.w/2;
+      constrainBasket();
+    }
+  });
+
+  // allow clicks on left/right half to nudge
+  canvas.addEventListener('click', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    if(x < rect.width/2) simulateMove(-1); else simulateMove(1);
+  });
+
+  // start automatically on first user interaction for mobile
+  function firstTouchStart() {
+    if(!running) startGame();
+    window.removeEventListener('touchstart', firstTouchStart);
+  }
+  window.addEventListener('touchstart', firstTouchStart);
+
+  // expose for debugging in console
+  window._catchStars = { startGame, togglePause, restartGame };
+})();
+</script>
+</body>
+</html>
